@@ -18,3 +18,5 @@ python nbody.py
 - Drag a planet to move it; release to give it launch velocity in the drag direction.
 - Right-click a planet to select it and inspect its current speed.
 - Toggle trails and velocity vectors, or pause the simulation.
+- In 3D, drag empty space to orbit the camera, middle-drag to pan, and use the mouse wheel to zoom.
+- Use `RESET CAMERA` to return to the default 3D view. Trails fade toward their older points, and a depth-aware particle field sits behind the planets.
