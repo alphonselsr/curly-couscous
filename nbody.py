@@ -117,6 +117,8 @@ class Simulation:
 
     def reset(self, count):
         self.bodies.clear()
+        self.dragging_body = None
+        self.drag_origin = None
         cx = WORLD_RECT.centerx
         cy = WORLD_RECT.centery
         for index in range(count):
@@ -142,6 +144,7 @@ class Simulation:
         substeps = max(1, min(4, math.ceil(dt)))
         sub_dt = dt / substeps
         for _ in range(substeps):
+            # Accumulate each pair's attraction once, applying equal and opposite forces.
             accelerations = [(0.0, 0.0) for _ in self.bodies]
             for first_index, first in enumerate(self.bodies):
                 for second_index in range(first_index + 1, len(self.bodies)):
@@ -164,6 +167,7 @@ class Simulation:
                 body.x += body.vx * sub_dt
                 body.y += body.vy * sub_dt
             if self.collisions:
+                # Correct overlap first, then apply an impulse along the collision normal.
                 self.resolve_collisions(restitution)
 
         if self.show_trails:
