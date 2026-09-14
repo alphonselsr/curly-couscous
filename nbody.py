@@ -1,4 +1,4 @@
-"""Interactive 2D/3D n-body sandbox.
+"""Interactive 2D n-body sandbox with gravity and elastic collisions.
 
 Run with: python nbody.py
 Requires pygame (pip install -r requirements.txt).
@@ -31,12 +31,10 @@ class Body:
     y: float
     vx: float
     vy: float
-    z: float
-    vz: float
     mass: float
     radius: float
     color: tuple[int, int, int]
-    trail: list[tuple[float, float, float]]
+    trail: list[tuple[float, float]]
 
 
 class Slider:
@@ -45,7 +43,7 @@ class Slider:
         self.minimum = minimum
         self.maximum = maximum
         self.value = value
-        self.label = label  
+        self.label = label
         self.formatter = formatter
         self.dragging = False
 
@@ -108,12 +106,11 @@ class Simulation:
         self.paused = False
         self.show_trails = True
         self.show_vectors = True
-        self.is_3d = False
+        self.collisions = True
         self.spawn_mass = 80.0
-        self.camera_yaw = 0.0
-        self.camera_pitch = 0.32
-        self.camera_zoom = 1.0
-        self.camera_pan = [0.0, 0.0]
+        self.track_all = True
+        self.camera_2d_center = [WORLD_RECT.centerx, WORLD_RECT.centery]
+        self.camera_2d_zoom = 1.0
         self.particles = []
         self.reset_particles()
         self.reset(8)
@@ -128,51 +125,79 @@ class Simulation:
             x = cx + math.cos(angle) * orbit
             y = cy + math.sin(angle) * orbit
             speed = 1.3 + index * 0.035
-            depth = math.sin(angle * 1.7) * 115 if self.is_3d else 0
             self.bodies.append(Body(x, y, -math.sin(angle) * speed, math.cos(angle) * speed,
-                                    depth, math.cos(angle * 1.4) * 0.25 if self.is_3d else 0,
                                     70 + index * 8, 5 + (index % 4), self.color_for(index), []))
         self.selected = 0 if self.bodies else None
+        self.camera_2d_center = [WORLD_RECT.centerx, WORLD_RECT.centery]
+        self.camera_2d_zoom = 1.0
 
     @staticmethod
     def color_for(index):
         colors = [(83, 211, 190), (255, 166, 88), (151, 126, 255), (255, 103, 115), (105, 179, 255)]
         return colors[index % len(colors)]
 
-    def step(self, dt, gravity, softening):
+    def step(self, dt, gravity, softening, restitution):
         if self.paused:
             return
-        accelerations = [(0.0, 0.0, 0.0) for _ in self.bodies]
+        substeps = max(1, min(4, math.ceil(dt)))
+        sub_dt = dt / substeps
+        for _ in range(substeps):
+            accelerations = [(0.0, 0.0) for _ in self.bodies]
+            for first_index, first in enumerate(self.bodies):
+                for second_index in range(first_index + 1, len(self.bodies)):
+                    second = self.bodies[second_index]
+                    dx = second.x - first.x
+                    dy = second.y - first.y
+                    distance_sq = max(dx * dx + dy * dy + softening * softening, 0.01)
+                    distance = math.sqrt(distance_sq)
+                    force = gravity / distance_sq
+                    ax = force * dx / distance
+                    ay = force * dy / distance
+                    accelerations[first_index] = (accelerations[first_index][0] + ax * second.mass,
+                                                   accelerations[first_index][1] + ay * second.mass)
+                    accelerations[second_index] = (accelerations[second_index][0] - ax * first.mass,
+                                                    accelerations[second_index][1] - ay * first.mass)
+
+            for index, body in enumerate(self.bodies):
+                body.vx += accelerations[index][0] * sub_dt
+                body.vy += accelerations[index][1] * sub_dt
+                body.x += body.vx * sub_dt
+                body.y += body.vy * sub_dt
+            if self.collisions:
+                self.resolve_collisions(restitution)
+
+        if self.show_trails:
+            for body in self.bodies:
+                if not body.trail or math.hypot(body.x - body.trail[-1][0], body.y - body.trail[-1][1]) > 3:
+                    body.trail.append((body.x, body.y))
+                    if len(body.trail) > 90:
+                        body.trail.pop(0)
+
+    def resolve_collisions(self, restitution):
         for first_index, first in enumerate(self.bodies):
-            for second_index in range(first_index + 1, len(self.bodies)):
-                second = self.bodies[second_index]
+            for second in self.bodies[first_index + 1:]:
                 dx = second.x - first.x
                 dy = second.y - first.y
-                dz = second.z - first.z if self.is_3d else 0
-                distance_sq = dx * dx + dy * dy + dz * dz + softening * softening
-                distance = math.sqrt(distance_sq)
-                force = gravity / distance_sq
-                ax = force * dx / distance
-                ay = force * dy / distance
-                az = force * dz / distance
-                accelerations[first_index] = (accelerations[first_index][0] + ax * second.mass,
-                                               accelerations[first_index][1] + ay * second.mass,
-                                               accelerations[first_index][2] + az * second.mass)
-                accelerations[second_index] = (accelerations[second_index][0] - ax * first.mass,
-                                                accelerations[second_index][1] - ay * first.mass,
-                                                accelerations[second_index][2] - az * first.mass)
-
-        for index, body in enumerate(self.bodies):
-            body.vx += accelerations[index][0] * dt
-            body.vy += accelerations[index][1] * dt
-            body.vz += accelerations[index][2] * dt
-            body.x += body.vx * dt
-            body.y += body.vy * dt
-            body.z += body.vz * dt if self.is_3d else 0
-            if self.show_trails and (not body.trail or abs(body.x - body.trail[-1][0]) > 2):
-                body.trail.append((body.x, body.y, body.z))
-                if len(body.trail) > 110:
-                    body.trail.pop(0)
+                distance_sq = dx * dx + dy * dy
+                minimum_distance = first.radius + second.radius
+                if distance_sq >= minimum_distance * minimum_distance:
+                    continue
+                distance = math.sqrt(distance_sq) if distance_sq > 0.0001 else 0.01
+                nx, ny = dx / distance, dy / distance
+                overlap = minimum_distance - distance
+                total_mass = first.mass + second.mass
+                first.x -= nx * overlap * second.mass / total_mass
+                first.y -= ny * overlap * second.mass / total_mass
+                second.x += nx * overlap * first.mass / total_mass
+                second.y += ny * overlap * first.mass / total_mass
+                relative_velocity = (second.vx - first.vx) * nx + (second.vy - first.vy) * ny
+                if relative_velocity >= 0:
+                    continue
+                impulse = -(1 + restitution) * relative_velocity / (1 / first.mass + 1 / second.mass)
+                first.vx -= impulse * nx / first.mass
+                first.vy -= impulse * ny / first.mass
+                second.vx += impulse * nx / second.mass
+                second.vy += impulse * ny / second.mass
 
     def body_at(self, position):
         nearest = None
@@ -185,27 +210,34 @@ class Simulation:
         return nearest
 
     def add_body(self, position, velocity=(0, 0)):
-        self.bodies.append(Body(position[0], position[1], velocity[0], velocity[1], 0, 0,
+        world_position = self.screen_to_world(position)
+        self.bodies.append(Body(world_position[0], world_position[1], velocity[0], velocity[1],
                                 self.spawn_mass, 6, self.color_for(len(self.bodies)), []))
         self.selected = len(self.bodies) - 1
+        if self.track_all:
+            self.update_2d_tracking()
 
-    def set_dimension(self, is_3d):
-        self.is_3d = is_3d
-        for index, body in enumerate(self.bodies):
-            if is_3d:
-                angle = index * math.tau / max(len(self.bodies), 1)
-                body.z = math.sin(angle * 1.7) * 115
-                body.vz = math.cos(angle * 1.4) * 0.25
-            else:
-                body.z = 0
-                body.vz = 0
-            body.trail.clear()
+    def update_2d_tracking(self):
+        if not self.track_all or not self.bodies:
+            return
+        min_x = min(body.x - body.radius for body in self.bodies)
+        max_x = max(body.x + body.radius for body in self.bodies)
+        min_y = min(body.y - body.radius for body in self.bodies)
+        max_y = max(body.y + body.radius for body in self.bodies)
+        target_center = [(min_x + max_x) * 0.5, (min_y + max_y) * 0.5]
+        available_width = WORLD_RECT.width - 72
+        available_height = WORLD_RECT.height - 72
+        target_zoom = min(1.0, available_width / max(max_x - min_x, 1),
+                          available_height / max(max_y - min_y, 1))
+        self.camera_2d_center[0] = target_center[0]
+        self.camera_2d_center[1] = target_center[1]
+        self.camera_2d_zoom = target_zoom
 
-    def reset_camera(self):
-        self.camera_yaw = 0.0
-        self.camera_pitch = 0.32
-        self.camera_zoom = 1.0
-        self.camera_pan = [0.0, 0.0]
+    def screen_to_world(self, position):
+        if not self.track_all:
+            return position
+        return ((position[0] - WORLD_RECT.centerx) / self.camera_2d_zoom + self.camera_2d_center[0],
+                (position[1] - WORLD_RECT.centery) / self.camera_2d_zoom + self.camera_2d_center[1])
 
     def reset_particles(self):
         self.particles = []
@@ -215,85 +247,51 @@ class Simulation:
             self.particles.append((
                 WORLD_RECT.centerx + math.cos(angle) * distance,
                 WORLD_RECT.centery + math.sin(angle * 1.31) * distance * 0.7,
-                math.sin(angle * 0.73) * 260,
                 1 + index % 2,
                 38 + (index * 17) % 46,
             ))
 
-    def orbit_camera(self, delta_x, delta_y):
-        self.camera_yaw += delta_x * 0.008
-        self.camera_pitch = max(-1.15, min(1.15, self.camera_pitch + delta_y * 0.008))
-
-    def pan_camera(self, delta_x, delta_y):
-        self.camera_pan[0] += delta_x
-        self.camera_pan[1] += delta_y
-
-    def zoom_camera(self, amount):
-        self.camera_zoom = max(0.35, min(2.8, self.camera_zoom * (1.12 ** amount)))
-
-    def project_point(self, x, y, z, radius=0):
-        if not self.is_3d:
-            return x, y, radius, 0
-        center_x, center_y = WORLD_RECT.center
-        local_x = x - center_x
-        local_y = y - center_y
-        yaw_cos = math.cos(self.camera_yaw)
-        yaw_sin = math.sin(self.camera_yaw)
-        rotated_x = local_x * yaw_cos - local_y * yaw_sin
-        rotated_y = local_x * yaw_sin + local_y * yaw_cos
-        pitch_cos = math.cos(self.camera_pitch)
-        pitch_sin = math.sin(self.camera_pitch)
-        screen_y = rotated_y * pitch_cos - z * pitch_sin
-        depth = rotated_y * pitch_sin + z * pitch_cos
-        perspective = max(0.55, min(1.5, 1 - depth / 620))
-        scale = self.camera_zoom * perspective
-        return (center_x + rotated_x * scale + self.camera_pan[0],
-                center_y + screen_y * scale + self.camera_pan[1],
-                radius * scale,
-                depth)
+    def project(self, body):
+        if not self.track_all:
+            return body.x, body.y, body.radius
+        return (WORLD_RECT.centerx + (body.x - self.camera_2d_center[0]) * self.camera_2d_zoom,
+                WORLD_RECT.centery + (body.y - self.camera_2d_center[1]) * self.camera_2d_zoom,
+                body.radius * self.camera_2d_zoom)
 
     def draw_particles(self, surface):
         particle_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-        for x, y, z, radius, brightness in self.particles:
-            point_x, point_y, point_radius, depth = self.project_point(x, y, z, radius)
-            if WORLD_RECT.collidepoint(point_x, point_y):
-                alpha = max(12, min(100, int(brightness - depth * 0.04)))
-                size = max(1, int(point_radius))
-                pygame.draw.circle(particle_layer, (150, 202, 221, alpha),
-                                   (int(point_x), int(point_y)), size)
+        for x, y, radius, brightness in self.particles:
+            if self.track_all:
+                screen_x = int(WORLD_RECT.centerx + (x - self.camera_2d_center[0]) * self.camera_2d_zoom)
+                screen_y = int(WORLD_RECT.centery + (y - self.camera_2d_center[1]) * self.camera_2d_zoom)
+            else:
+                screen_x, screen_y = int(x), int(y)
+            if WORLD_RECT.collidepoint(screen_x, screen_y):
+                pygame.draw.circle(particle_layer, (150, 202, 221, brightness),
+                                   (screen_x, screen_y), max(1, int(radius * self.camera_2d_zoom)))
         surface.blit(particle_layer, (0, 0))
 
-    def project(self, body):
-        if not self.is_3d:
-            return body.x, body.y, body.radius
-        projected_x, projected_y, projected_radius, _ = self.project_point(
-            body.x, body.y, body.z, body.radius)
-        return projected_x, projected_y, projected_radius
-
     def draw(self, surface, small_font):
-        draw_order = sorted(enumerate(self.bodies),
-                            key=lambda item: self.project_point(item[1].x, item[1].y, item[1].z)[3])
-        for index, body in draw_order:
+        trail_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for index, body in enumerate(self.bodies):
             projected_x, projected_y, projected_radius = self.project(body)
             if self.show_trails and len(body.trail) > 1:
-                trail_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-                trail_points = []
-                for x, y, z in body.trail:
-                    point_x, point_y, _, _ = self.project_point(x, y, z)
-                    trail_points.append((point_x, point_y))
+                if self.track_all:
+                    trail_points = [(int(WORLD_RECT.centerx + (x - self.camera_2d_center[0]) * self.camera_2d_zoom),
+                                     int(WORLD_RECT.centery + (y - self.camera_2d_center[1]) * self.camera_2d_zoom))
+                                    for x, y in body.trail]
+                else:
+                    trail_points = [(int(x), int(y)) for x, y in body.trail]
                 for trail_index in range(1, len(trail_points)):
-                    start = trail_points[trail_index - 1]
-                    end = trail_points[trail_index]
-                    if WORLD_RECT.colliderect(pygame.Rect(min(start[0], end[0]), min(start[1], end[1]),
-                                                          abs(end[0] - start[0]) + 1,
-                                                          abs(end[1] - start[1]) + 1)):
-                        alpha = int(22 + 125 * trail_index / len(trail_points))
-                        pygame.draw.line(trail_layer, (*body.color, alpha),
-                                         (int(start[0]), int(start[1])), (int(end[0]), int(end[1])), 2)
-                surface.blit(trail_layer, (0, 0))
+                    alpha = int(12 + 105 * trail_index / len(trail_points))
+                    pygame.draw.line(trail_layer, (*body.color, alpha), trail_points[trail_index - 1],
+                                     trail_points[trail_index], 2)
+        surface.blit(trail_layer, (0, 0))
+        for index, body in enumerate(self.bodies):
+            projected_x, projected_y, projected_radius = self.project(body)
             if self.show_vectors and (index == self.selected or len(self.bodies) < 12):
-                end_x, end_y, _, _ = self.project_point(body.x + body.vx * 16, body.y + body.vy * 16,
-                                                        body.z + body.vz * 16)
+                end_x, end_y, _ = self.project(Body(body.x + body.vx * 16, body.y + body.vy * 16,
+                                                     0, 0, body.mass, body.radius, body.color, []))
                 pygame.draw.line(surface, body.color, (int(projected_x), int(projected_y)),
                                  (int(end_x), int(end_y)), 1)
             pygame.draw.circle(surface, (4, 7, 14), (int(projected_x), int(projected_y)), int(projected_radius + 3))
@@ -308,22 +306,20 @@ def draw_text(surface, font, text, position, color=TEXT):
     surface.blit(font.render(text, True, color), position)
 
 
-def draw_world_backdrop(surface, is_3d):
-    pygame.draw.rect(surface, BG, WORLD_RECT)
+def draw_world_backdrop(surface):
+    for y in range(WORLD_RECT.top, WORLD_RECT.bottom):
+        ratio = y / HEIGHT
+        color = (8 + int(7 * ratio), 12 + int(9 * ratio), 24 + int(16 * ratio))
+        pygame.draw.line(surface, color, (WORLD_RECT.left, y), (WORLD_RECT.right, y))
     for x in range(WORLD_RECT.left + 20, WORLD_RECT.right, 48):
-        pygame.draw.line(surface, (13, 22, 37), (x, WORLD_RECT.top), (x, WORLD_RECT.bottom), 1)
+        pygame.draw.line(surface, (16, 26, 43), (x, WORLD_RECT.top), (x, WORLD_RECT.bottom), 1)
     for y in range(20, WORLD_RECT.bottom, 48):
-        pygame.draw.line(surface, (13, 22, 37), (WORLD_RECT.left, y), (WORLD_RECT.right, y), 1)
+        pygame.draw.line(surface, (16, 26, 43), (WORLD_RECT.left, y), (WORLD_RECT.right, y), 1)
     for index in range(34):
         x = WORLD_RECT.left + ((index * 113) % (WORLD_RECT.width - 18)) + 9
         y = ((index * 71) % (WORLD_RECT.height - 18)) + 9
         brightness = 54 + (index * 17) % 42
         pygame.draw.circle(surface, (brightness, brightness + 8, brightness + 18), (x, y), 1)
-    if is_3d:
-        center = WORLD_RECT.center
-        pygame.draw.ellipse(surface, (25, 63, 75), WORLD_RECT.inflate(-130, -170), 1)
-        pygame.draw.line(surface, (27, 69, 75), (center[0] - 250, center[1]), (center[0] + 250, center[1]), 1)
-        pygame.draw.line(surface, (27, 69, 75), (center[0], center[1] - 180), (center[0], center[1] + 180), 1)
 
 
 def main():
@@ -345,12 +341,8 @@ def main():
     pause_button = Button((150, 353, 118, 34), "PAUSE")
     trails_button = Button((24, 408, 118, 30), "TRAILS: ON")
     vectors_button = Button((150, 408, 118, 30), "VECTORS: ON")
-    mode_button = Button((24, 451, 244, 34), "MODE: 2D", True)
-    view_button = Button((24, 493, 244, 30), "RESET CAMERA")
-    camera_dragging = False
-    camera_moved = False
-    camera_last_pos = None
-    pan_dragging = False
+    tracking_button = Button((24, 451, 118, 30), "TRACK: ON", True)
+    collisions_button = Button((150, 451, 118, 30), "COLLISIONS: ON", True)
     running = True
 
     while running:
@@ -366,70 +358,44 @@ def main():
             elif pause_button.clicked(event):
                 sim.paused = not sim.paused
                 pause_button.text = "RESUME" if sim.paused else "PAUSE"
-            elif view_button.clicked(event):
-                sim.reset_camera()
             elif trails_button.clicked(event):
                 sim.show_trails = not sim.show_trails
-            elif mode_button.clicked(event):
-                sim.set_dimension(not sim.is_3d)
-                mode_button.text = f"MODE: {'3D' if sim.is_3d else '2D'}"
+            elif tracking_button.clicked(event):
+                sim.track_all = not sim.track_all
+                tracking_button.text = f"TRACK: {'ON' if sim.track_all else 'OFF'}"
+            elif collisions_button.clicked(event):
+                sim.collisions = not sim.collisions
+                collisions_button.text = f"COLLISIONS: {'ON' if sim.collisions else 'OFF'}"
             elif vectors_button.clicked(event):
                 sim.show_vectors = not sim.show_vectors
                 vectors_button.text = f"VECTORS: {'ON' if sim.show_vectors else 'OFF'}"
-            elif event.type == pygame.MOUSEWHEEL and sim.is_3d and WORLD_RECT.collidepoint(pygame.mouse.get_pos()):
-                sim.zoom_camera(event.y)
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2 and sim.is_3d:
-                pan_dragging = True
-                camera_last_pos = event.pos
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
-                pan_dragging = False
-                camera_last_pos = None
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and WORLD_RECT.collidepoint(event.pos):
                 sim.dragging_body = sim.body_at(event.pos)
                 sim.drag_origin = event.pos
-                if sim.dragging_body is None and sim.is_3d:
-                    camera_dragging = True
-                    camera_moved = False
-                    camera_last_pos = event.pos
-                elif sim.dragging_body is None:
+                if sim.dragging_body is None:
                     sim.add_body(event.pos)
                     sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if sim.dragging_body is not None and sim.drag_origin is not None:
                     body = sim.bodies[sim.dragging_body]
-                    body.vx = (event.pos[0] - sim.drag_origin[0]) * 0.035
-                    body.vy = (event.pos[1] - sim.drag_origin[1]) * 0.035
-                elif camera_dragging and not camera_moved:
-                    sim.add_body(event.pos)
-                    sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
+                    origin = sim.screen_to_world(sim.drag_origin)
+                    release = sim.screen_to_world(event.pos)
+                    body.vx = (release[0] - origin[0]) * 0.035
+                    body.vy = (release[1] - origin[1]) * 0.035
                 sim.dragging_body = None
                 sim.drag_origin = None
-                camera_dragging = False
             elif event.type == pygame.MOUSEMOTION and sim.dragging_body is not None:
                 body = sim.bodies[sim.dragging_body]
-                if sim.is_3d:
-                    depth_scale = max(0.55, min(1.5, 1 - body.z / 520))
-                    center_x, center_y = WORLD_RECT.center
-                    body.x = center_x + (event.pos[0] - center_x) / depth_scale
-                    body.y = center_y + (event.pos[1] - center_y) / depth_scale
-                else:
-                    body.x, body.y = event.pos
+                world_position = sim.screen_to_world(event.pos)
+                body.x, body.y = world_position
                 body.trail.clear()
                 sim.selected = sim.dragging_body
-            elif event.type == pygame.MOUSEMOTION and camera_dragging and sim.is_3d:
-                delta_x = event.pos[0] - camera_last_pos[0]
-                delta_y = event.pos[1] - camera_last_pos[1]
-                if abs(delta_x) + abs(delta_y) > 1:
-                    camera_moved = True
-                    sim.orbit_camera(delta_x, delta_y)
-                camera_last_pos = event.pos
-            elif event.type == pygame.MOUSEMOTION and pan_dragging and sim.is_3d:
-                sim.pan_camera(event.rel[0], event.rel[1])
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3 and WORLD_RECT.collidepoint(event.pos):
                 sim.selected = sim.body_at(event.pos)
 
-        sim.step(dt, sliders["gravity"].value, sliders["softening"].value)
-        draw_world_backdrop(screen, sim.is_3d)
+        sim.step(dt, sliders["gravity"].value, sliders["softening"].value, 0.82)
+        sim.update_2d_tracking()
+        draw_world_backdrop(screen)
         pygame.draw.rect(screen, PANEL, (0, 0, PANEL_WIDTH, HEIGHT))
         pygame.draw.line(screen, PANEL_EDGE, (PANEL_WIDTH, 0), (PANEL_WIDTH, HEIGHT), 1)
         draw_text(screen, title_font, "ORBIT LAB", (24, 24), ACCENT)
@@ -438,22 +404,22 @@ def main():
         draw_text(screen, font, "SIMULATION", (24, 88), MUTED)
         for slider in sliders.values():
             slider.draw(screen, font, small_font)
-        for button in (reset_button, pause_button, trails_button, vectors_button, mode_button, view_button):
+        for button in (reset_button, pause_button, trails_button, vectors_button,
+                       tracking_button, collisions_button):
             button.draw(screen, font, button.rect.collidepoint(pygame.mouse.get_pos()))
-        draw_text(screen, font, "CREATE / EDIT", (24, 544), MUTED)
-        draw_text(screen, small_font, "Empty click: add planet", (24, 572), TEXT)
-        draw_text(screen, small_font, "Drag planet: move + launch", (24, 594), TEXT)
-        draw_text(screen, small_font, "Right click: select", (24, 616), TEXT)
-        if sim.is_3d:
-            draw_text(screen, small_font, "3D drag: orbit  |  MMB: pan  |  wheel: zoom", (24, 638), ACCENT)
-        draw_text(screen, font, f"BODIES  {len(sim.bodies):02d}", (24, 682), TEXT)
-        status = "PAUSED" if sim.paused else ("3D SPACE" if sim.is_3d else "2D PLANE")
-        draw_text(screen, small_font, status, (24, 708), ORANGE if sim.paused else ACCENT)
+        draw_text(screen, font, "CREATE / EDIT", (24, 506), MUTED)
+        draw_text(screen, small_font, "Empty click: add planet", (24, 534), TEXT)
+        draw_text(screen, small_font, "Drag planet: move + launch", (24, 556), TEXT)
+        draw_text(screen, small_font, "Right click: select", (24, 578), TEXT)
+        draw_text(screen, small_font, "Tracking keeps every planet visible", (24, 600), ACCENT if sim.track_all else MUTED)
+        draw_text(screen, font, f"BODIES  {len(sim.bodies):02d}", (24, 642), TEXT)
+        status = "PAUSED" if sim.paused else "2D GRAVITY FIELD"
+        draw_text(screen, small_font, status, (24, 668), ORANGE if sim.paused else ACCENT)
         if sim.selected is not None and sim.selected < len(sim.bodies):
             body = sim.bodies[sim.selected]
-            speed = math.sqrt(body.vx ** 2 + body.vy ** 2 + body.vz ** 2)
-            draw_text(screen, small_font, f"SELECTED  #{sim.selected + 1}", (150, 682), body.color)
-            draw_text(screen, small_font, f"mass {body.mass:.0f}   speed {speed:.2f}", (150, 708), MUTED)
+            speed = math.hypot(body.vx, body.vy)
+            draw_text(screen, small_font, f"SELECTED  #{sim.selected + 1}", (150, 642), body.color)
+            draw_text(screen, small_font, f"mass {body.mass:.0f}   speed {speed:.2f}", (150, 668), MUTED)
         sim.draw_particles(screen)
         sim.draw(screen, small_font)
         pygame.display.flip()

@@ -1,6 +1,6 @@
 # Orbit Lab
 
-An interactive 2D/3D n-body gravity sandbox written in Python with the pygame API. The 3D mode uses real depth, 3D gravity, perspective scaling, and depth-sorted rendering.
+An interactive 2D n-body gravity sandbox written in Python with pygame. It combines pairwise gravity, stable elastic planet collisions, automatic framing, trails, and a particle background.
 
 ## Run it
 
@@ -12,11 +12,10 @@ python nbody.py
 ## Controls
 
 - Adjust `PLANETS`, `GRAVITY`, `TIME SCALE`, and `SOFTENING` with the sliders.
-- Switch between `MODE: 2D` and `MODE: 3D`. In 3D, depth changes apparent size and bodies attract each other in all three axes.
 - Press `RESET SYSTEM` to regenerate the selected number of planets.
 - Left-click empty space to add a planet.
 - Drag a planet to move it; release to give it launch velocity in the drag direction.
 - Right-click a planet to select it and inspect its current speed.
-- Toggle trails and velocity vectors, or pause the simulation.
-- In 3D, drag empty space to orbit the camera, middle-drag to pan, and use the mouse wheel to zoom.
-- Use `RESET CAMERA` to return to the default 3D view. Trails fade toward their older points, and a depth-aware particle field sits behind the planets.
+- Toggle trails, velocity vectors, collisions, or pause the simulation.
+- `TRACK: ON` keeps every planet inside the visible space by following the group and adjusting the zoom. Toggle it off for a fixed view.
+- Collisions separate overlapping planets and apply mass-aware elastic impulses in the physics core.
