@@ -359,45 +359,39 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             slider_changed = any(slider.handle(event) for slider in sliders.values())
-            if slider_changed and event.type == pygame.MOUSEMOTION:
+            if slider_changed:
                 continue
             if reset_button.clicked(event):
                 sim.reset(round(sliders["bodies"].value))
             elif pause_button.clicked(event):
+                sim.paused = not sim.paused
+                pause_button.text = "RESUME" if sim.paused else "PAUSE"
             elif view_button.clicked(event):
                 sim.reset_camera()
+            elif trails_button.clicked(event):
+                sim.show_trails = not sim.show_trails
+            elif mode_button.clicked(event):
+                sim.set_dimension(not sim.is_3d)
+                mode_button.text = f"MODE: {'3D' if sim.is_3d else '2D'}"
+            elif vectors_button.clicked(event):
+                sim.show_vectors = not sim.show_vectors
+                vectors_button.text = f"VECTORS: {'ON' if sim.show_vectors else 'OFF'}"
             elif event.type == pygame.MOUSEWHEEL and sim.is_3d and WORLD_RECT.collidepoint(pygame.mouse.get_pos()):
                 sim.zoom_camera(event.y)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2 and sim.is_3d:
                 pan_dragging = True
                 camera_last_pos = event.pos
-                sim.paused = not sim.paused
-                pause_button.text = "RESUME" if sim.paused else "PAUSE"
-            elif trails_button.clicked(event):
-                sim.show_trails = not sim.show_trails
-                    if sim.is_3d:
-                        camera_dragging = True
-                        camera_moved = False
-                        camera_last_pos = event.pos
-                    else:
-                        sim.add_body(event.pos)
-                        sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
-                sim.show_vectors = not sim.show_vectors
-                vectors_button.text = f"VECTORS: {'ON' if sim.show_vectors else 'OFF'}"
-            elif mode_button.clicked(event):
-                sim.set_dimension(not sim.is_3d)
-                mode_button.text = f"MODE: {'3D' if sim.is_3d else '2D'}"
-                elif camera_dragging and not camera_moved:
-                    sim.add_body(event.pos)
-                    sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and WORLD_RECT.collidepoint(event.pos):
-                sim.dragging_body = sim.body_at(event.pos)
-                camera_dragging = False
-                sim.drag_origin = event.pos
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
                 pan_dragging = False
                 camera_last_pos = None
-                if sim.dragging_body is None:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and WORLD_RECT.collidepoint(event.pos):
+                sim.dragging_body = sim.body_at(event.pos)
+                sim.drag_origin = event.pos
+                if sim.dragging_body is None and sim.is_3d:
+                    camera_dragging = True
+                    camera_moved = False
+                    camera_last_pos = event.pos
+                elif sim.dragging_body is None:
                     sim.add_body(event.pos)
                     sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -405,8 +399,12 @@ def main():
                     body = sim.bodies[sim.dragging_body]
                     body.vx = (event.pos[0] - sim.drag_origin[0]) * 0.035
                     body.vy = (event.pos[1] - sim.drag_origin[1]) * 0.035
+                elif camera_dragging and not camera_moved:
+                    sim.add_body(event.pos)
+                    sliders["bodies"].value = min(sliders["bodies"].maximum, len(sim.bodies))
                 sim.dragging_body = None
                 sim.drag_origin = None
+                camera_dragging = False
             elif event.type == pygame.MOUSEMOTION and sim.dragging_body is not None:
                 body = sim.bodies[sim.dragging_body]
                 if sim.is_3d:
